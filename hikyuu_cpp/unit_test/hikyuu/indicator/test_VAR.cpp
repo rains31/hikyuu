@@ -8,12 +8,14 @@
  */
 
 #include "../test_config.h"
+#include <cmath>
 #include <fstream>
 #include <hikyuu/StockManager.h>
 #include <hikyuu/indicator/crt/KDATA.h>
 #include <hikyuu/indicator/crt/VAR.h>
 #include <hikyuu/indicator/crt/CVAL.h>
 #include <hikyuu/indicator/crt/PRICELIST.h>
+#include <hikyuu/indicator/crt/MA.h>
 
 using namespace hku;
 

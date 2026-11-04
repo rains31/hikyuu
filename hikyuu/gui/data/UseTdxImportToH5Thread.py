@@ -66,6 +66,7 @@ class UseTdxImportToH5Thread(QThread):
 
         self.process_list = []
         self.hosts = []
+        self.init_fail_msg = ''
         self.tasks = []
 
         self.quotations = []
@@ -120,13 +121,17 @@ class UseTdxImportToH5Thread(QThread):
         self.send_message(['INFO', QCoreApplication.translate("ImportProgress", '搜索通达信服务器')])
         self.hosts = search_best_tdx()
         if not self.hosts:
-            self.logger.warn('无法连接通达信行情服务器！请检查网络设置！')
-            self.send_message(['INFO', QCoreApplication.translate("ImportProgress", '无法连接通达信行情服务器！请检查网络设置！')])
-            return
+            self.init_fail_msg = QCoreApplication.translate(
+                "ImportProgress",
+                '无法连接通达信行情服务器！请检查网络设置，或在 ~/.hikyuu/hosts.py 中配置可用的行情服务器地址')
+            self.logger.warn(self.init_fail_msg)
+            self.send_message(['INFO', self.init_fail_msg])
+            return False
 
         if task_count == 0:
-            self.send_message(['INFO', QCoreApplication.translate("ImportProgress", '未选择需要导入的行情数据！')])
-            return
+            self.init_fail_msg = QCoreApplication.translate("ImportProgress", '未选择需要导入的行情数据！')
+            self.send_message(['INFO', self.init_fail_msg])
+            return False
 
         use_tdx_number = min(
             task_count, len(self.hosts),
@@ -191,10 +196,13 @@ class UseTdxImportToH5Thread(QThread):
             self.tasks.append(
                 ImportTdxToH5Task(self.log_queue, self.queue, config, 'SZ', '1MIN', self.quotations, src_dir, dest_dir)
             )
+        return True
 
     def run(self):
         try:
-            self.init_task()
+            if not self.init_task():
+                self.send_message(['THREAD', 'FAILURE', self.init_fail_msg])
+                return
             self._run()
         except Exception as e:
             self.logger.error(str(e))

@@ -99,6 +99,8 @@ target("hikyuu")
         end
         add_cxflags("-frtti")
         add_shflags("-Wl,-flat_namespace,-undefined,dynamic_lookup")
+        -- Keep room in the Mach-O header for the install_name_tool fixups of the core target
+        add_shflags("-Wl,-headerpad_max_install_names")
         add_links("sqlite3")
         add_frameworks("CoreFoundation")
     end

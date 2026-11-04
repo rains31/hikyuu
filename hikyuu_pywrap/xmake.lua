@@ -155,29 +155,62 @@ target("core")
 
         if is_plat("macosx") then
             dst_obj = dst_obj .. ".so"
+
+            -- The xmake packages ship dylibs whose install names and inter-dependencies are bare
+            -- file names, which dyld can only resolve when the current working directory is this
+            -- directory. Rewrite those references to @rpath and make sure each image has an
+            -- @loader_path rpath, so that "import hikyuu" works from any directory. The @rpath/
+            -- prefix is used because it is the shortest expansion: the prebuilt package dylibs
+            -- have no spare room in their Mach-O header for a longer load command, and
+            -- libhikyuu needs -headerpad_max_install_names at link time to get some.
+            local lib_names = {}
             for _, filepath in ipairs(os.files(dst_dir .. "/*.dylib")) do
-                -- print(path.filename(filepath))
-                local filename = path.filename(filepath)
-                os.run(format("install_name_tool -change @rpath/%s @loader_path/%s %s", filename, filename, dst_obj))
-                os.run(format("install_name_tool -change %s @loader_path/%s %s", filename, filename, dst_obj))
+                lib_names[path.filename(filepath)] = true
             end
-            os.run(format("install_name_tool -change libssl.3.dylib @loader_path/libssl.3.dylib %s", dst_obj))
-            os.run(format("install_name_tool -change libcrypto.3.dylib @loader_path/libcrypto.3.dylib %s", dst_obj))
 
-            if get_config("mysql") then
-                if get_config("kind") == "shared" then
-                    dst_obj = dst_dir .. "libhikyuu.dylib"
-                    os.run(format("install_name_tool -change libssl.3.dylib @loader_path/libssl.3.dylib %s", dst_obj))
-                    os.run(format("install_name_tool -change libcrypto.3.dylib @loader_path/libcrypto.3.dylib %s", dst_obj))
-                else
-                    os.cp(target:targetdir() .. '/*.a', dst_dir)
+            local function imageInstallName(obj)
+                local lines = {}
+                for line in os.iorunv("otool", {"-D", obj}):gmatch("[^\r\n]+") do
+                    table.insert(lines, line)
                 end
+                -- The 2nd line is the install name, sometimes suffixed with " (architecture ...)"
+                local id = lines[2] and lines[2]:trim() or ""
+                return id:gsub("%s*%(.+$", ""):trim()
+            end
 
-                if not get_config("disable_libmysqlclient") then
-                    filename = "libmysqlclient.21.dylib"
-                    os.run(format("install_name_tool -change @loader_path/../lib/libssl.3.dylib @loader_path/libssl.3.dylib %s", dst_dir .. filename))
-                    os.run(format("install_name_tool -change @loader_path/../lib/libcrypto.3.dylib @loader_path/libcrypto.3.dylib %s", dst_dir .. filename))
+            local function fixImage(obj)
+                local name = path.filename(obj)
+                local id = imageInstallName(obj)
+                local changed = false
+                -- A bare install name can only be found in the current working directory, so make it @rpath based
+                if id ~= "" and not id:find("^/") and not id:find("^@") then
+                    os.run(format("install_name_tool -id @rpath/%s %s", id, obj), {try = true})
+                    changed = true
                 end
+                for line in os.iorunv("otool", {"-L", obj}):gmatch("[^\r\n]+") do
+                    local dep = line:match("^%s+([%w%.%-_/%@]+%.dylib)%s+%(")
+                    local base = dep and dep:match("([^/]+%.dylib)$")
+                    -- Relocate the shipped dylibs only, and leave the system libraries alone
+                    if base and lib_names[base] and dep ~= name and not dep:find("^/")
+                        and dep ~= "@rpath/" .. base and dep ~= "@loader_path/" .. base then
+                        os.run(format("install_name_tool -change %s @rpath/%s %s", dep, base, obj), {try = true})
+                        changed = true
+                    end
+                end
+                if changed and not os.iorunv("otool", {"-l", obj}):find("LC_RPATH") then
+                    os.run(format("install_name_tool -add_rpath @loader_path %s", obj), {try = true})
+                end
+            end
+
+            for _, filepath in ipairs(os.files(dst_dir .. "/*.dylib")) do
+                fixImage(filepath)
+            end
+            for _, filepath in ipairs(os.files(dst_dir .. "/core*.so")) do
+                fixImage(filepath)
+            end
+
+            if get_config("mysql") and get_config("kind") ~= "shared" then
+                os.cp(target:targetdir() .. '/*.a', dst_dir)
             end
 
             -- add the macOS signature

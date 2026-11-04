@@ -8,11 +8,13 @@
  */
 
 #include "doctest/doctest.h"
+#include <cmath>
 #include <fstream>
 #include <hikyuu/StockManager.h>
 #include <hikyuu/indicator/crt/SIGNED_POWER.h>
 #include <hikyuu/indicator/crt/KDATA.h>
 #include <hikyuu/indicator/crt/PRICELIST.h>
+#include <hikyuu/indicator/crt/CVAL.h>
 
 using namespace hku;
 

@@ -8,11 +8,14 @@
  */
 
 #include "doctest/doctest.h"
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <hikyuu/StockManager.h>
 #include <hikyuu/indicator/crt/DROPNA.h>
 #include <hikyuu/indicator/crt/KDATA.h>
 #include <hikyuu/indicator/crt/PRICELIST.h>
+#include <hikyuu/indicator/crt/MA.h>
 
 using namespace hku;
 

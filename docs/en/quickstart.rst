@@ -34,6 +34,34 @@ as shown below:
     files in the ``.hikyuu`` directory under your user directory.
 
 
+Configure the TDX quote servers
+-------------------------------
+
+Online import (the stock code table, indexes, the financial data, the K-line) requires a connection to
+a TDX quote server. Most of the server addresses bundled with pytdx are no longer alive. If the GUI
+reports "无法连接通达信行情服务器！请检查网络设置！" (cannot connect to the TDX quote server), configure
+your own addresses in ``~/.hikyuu/hosts.py`` (loaded automatically at hikyuu startup, no source change
+needed):
+
+.. code-block:: python
+
+    # ~/.hikyuu/hosts.py
+    hq_hosts = [
+        ("Shanghai Telecom", "180.153.18.170", 7709),
+        ("Hangzhou Telecom", "115.238.90.165", 7709),
+        ("Xian Unicom", "117.34.114.13", 7709),
+    ]
+
+The list is ordered by priority and the first entry is used to import the stock code table; the short
+``(ip, port)`` form is also accepted. User-provided addresses are trusted as-is, i.e. no online probe
+is performed, so servers that only serve the stock list / the financial data also work.
+
+.. note::
+
+    Some servers return the stock list but no K-line data (the online K-line import then makes no
+    progress). In that case check "TDX local data" in the GUI: download the post-market data with the
+    TDX client first, then import the ``vipdoc`` directory offline; this route needs no quote server.
+
 
 Learn from the examples
 -----------------------

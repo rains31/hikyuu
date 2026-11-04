@@ -40,6 +40,8 @@ if project_root not in sys.path:
 
 from hikyuu.gui.data.UseTdxImportToH5Thread import UseTdxImportToH5Thread
 from hikyuu.gui.data.ImportTdxToH5Task import ImportTdxToH5Task
+from hikyuu.gui.data.UsePytdxImportToH5Thread import UsePytdxImportToH5Thread
+from hikyuu.data.common_pytdx import search_best_tdx, _to_host_tuple
 
 # 引入 get_real_tdx_filepath, 用于支持使用真实的测试数据
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -59,12 +61,17 @@ class MockRunner:
     def __init__(self):
         """初始化状态，标记导入任务尚未完成。"""
         self.finished = False
+        self.messages = []
+        self.failure_msg = None
 
     def on_message_from_thread(self, msg):
         """
         这是一个模拟的槽函数, 用于接收信号。当接收到表示任务结束或失败的
         特定消息时, 将 finished 标志位设为 True。
         """
+        self.messages.append(msg)
+        if msg and len(msg) > 2 and msg[2] == 'FAILURE':
+            self.failure_msg = msg[3] if len(msg) > 3 else ''
         # 检查消息是否为表示任务结束的特定格式: ['HDF5_IMPORT', 'THREAD', 'FINISHED' 或 'FAILURE']
         if msg and len(msg) > 2 and msg[0] == 'HDF5_IMPORT' and msg[1] == 'THREAD' and msg[2] in ('FINISHED', 'FAILURE'):
             self.finished = True
@@ -309,6 +316,195 @@ class TestTdxImport(unittest.TestCase):
             # 如果记录数大于1, 则认为是真实的通达信数据, 只做基本的存在性检查
             else:
                 self.assertTrue(dset.shape[0] > 1, f"数据记录数量不正确. 预期: > 1, 实际: {dset.shape[0]}")
+
+    # --- 回归测试: 服务器搜索失败时不再抛出 IndexError ---
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.TdxHq_API')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_new_holidays')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_index_name')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_stock_name')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_create_database')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.search_best_tdx')
+    def test_no_server_emits_failure(self, mock_search, mock_create, mock_stock, mock_index, mock_holiday, mock_api):
+        """
+        回归测试: 搜索不到任何通达信行情服务器时 (返回空列表), run() 必须发出 FAILURE
+        结束消息并终止, 而不是继续执行 _run 并在 self.hosts[0] 处抛出 IndexError。
+        """
+        mock_search.return_value = []
+
+        runner = MockRunner()
+        importer = UseTdxImportToH5Thread(None, self.config)
+        importer.message = MockSignal(runner.on_message_from_thread)
+
+        with patch.object(importer, '_run') as mock_run:
+            importer.run()
+            # _run 绝不能在初始化失败后被调用
+            mock_run.assert_not_called()
+
+        self.assertTrue(runner.finished, "未搜索到服务器时, 应发出 FAILURE 消息以复位导入界面。")
+        self.assertIn('通达信行情服务器', runner.failure_msg, "FAILURE 消息应说明服务器连接失败的原因。")
+
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.TdxHq_API')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_new_holidays')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_index_name')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_import_stock_name')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.sqlite_create_database')
+    @patch('hikyuu.gui.data.UseTdxImportToH5Thread.search_best_tdx')
+    def test_no_ktype_emits_failure(self, mock_search, mock_create, mock_stock, mock_index, mock_holiday, mock_api):
+        """
+        回归测试: 未勾选任何待导入行情数据 (task_count == 0) 时, 同样必须发出 FAILURE
+        结束消息, 避免界面停留在"导入中"状态。
+        """
+        mock_search.return_value = [(True, 0.0, '127.0.0.1', 7709)]
+        self.config.set('ktype', 'day', 'False')
+
+        runner = MockRunner()
+        importer = UseTdxImportToH5Thread(None, self.config)
+        importer.message = MockSignal(runner.on_message_from_thread)
+
+        with patch.object(importer, '_run') as mock_run:
+            importer.run()
+            mock_run.assert_not_called()
+
+        self.assertTrue(runner.finished, "未选择导入数据时, 应发出 FAILURE 消息以复位导入界面。")
+        self.assertIn('未选择需要导入的行情数据', runner.failure_msg)
+
+
+class TestPytdxImportNoServer(unittest.TestCase):
+    """
+    针对 pytdx 在线导入线程的回归测试: 服务器搜索失败时, run() 必须优雅终止,
+    而不是在 _run 中访问 self.hosts[0] 抛出 IndexError (线上崩溃的原始现场)。
+    """
+    def setUp(self):
+        self.config = ConfigParser()
+        for section, items in (('hdf5', {'enable': 'True', 'dir': '/tmp/unused_h5'}),
+                               ('pytdx', {'use_tdx_number': '10'}),
+                               ('quotation', {'stock': 'True', 'fund': 'False'}),
+                               ('ktype', {'day': 'True', 'min5': 'False', 'min': 'False',
+                                          'trans': 'False', 'time': 'False'}),
+                               ('weight', {'enable': 'False'}),
+                               ('finance', {'enable': 'False'}),
+                               ('block', {'enable': 'False'})):
+            self.config.add_section(section)
+            for key, value in items.items():
+                self.config.set(section, key, value)
+
+    @patch('hikyuu.gui.data.UsePytdxImportToH5Thread.search_best_tdx')
+    def test_no_server_emits_failure(self, mock_search):
+        mock_search.return_value = []
+
+        runner = MockRunner()
+        importer = UsePytdxImportToH5Thread(None, self.config)
+        importer.message = MockSignal(runner.on_message_from_thread)
+
+        with patch.object(importer, '_run') as mock_run:
+            importer.run()
+            mock_run.assert_not_called()
+
+        self.assertTrue(runner.finished, "未搜索到服务器时, 应发出 FAILURE 消息以复位导入界面。")
+        self.assertIn('通达信行情服务器', runner.failure_msg)
+
+    @patch('hikyuu.gui.data.UsePytdxImportToH5Thread.search_best_tdx')
+    def test_no_ktype_emits_failure(self, mock_search):
+        mock_search.return_value = [(True, 0.0, '127.0.0.1', 7709)]
+        self.config.set('ktype', 'day', 'False')
+
+        runner = MockRunner()
+        importer = UsePytdxImportToH5Thread(None, self.config)
+        importer.message = MockSignal(runner.on_message_from_thread)
+
+        with patch.object(importer, '_run') as mock_run:
+            importer.run()
+            mock_run.assert_not_called()
+
+        self.assertTrue(runner.finished, "未选择导入数据时, 应发出 FAILURE 消息以复位导入界面。")
+        self.assertIn('未选择需要导入的行情数据', runner.failure_msg)
+
+
+class TestSearchBestTdx(unittest.TestCase):
+    """
+    针对 search_best_tdx 的行为测试, 全部通过 mock 完成, 不依赖真实网络。
+    重点覆盖此前的两个缺陷:
+    1. executor.map(..., timeout=2) 会让整体搜索抛出 TimeoutError;
+    2. 数据一致性校验全部失败时被误判为"没有可用服务器"。
+    """
+    hosts = [('服务器一', '127.0.0.1', 7709), ('服务器二', '127.0.0.2', 7709), ('服务器三', '127.0.0.3', 7709)]
+    # 固定耗时, 使 pinged 的排序结果可预期
+    costs = {'127.0.0.1': 0.3, '127.0.0.2': 0.2, '127.0.0.3': 0.4}
+
+    @patch('hikyuu.data.common_pytdx.TdxHq_API')
+    @patch('hikyuu.data.common_pytdx.ping')
+    def test_all_ping_fail(self, mock_ping, mock_api):
+        """所有服务器都ping不通 -> 返回空列表, 且不抛出异常"""
+        mock_ping.side_effect = lambda ip, port, multithread: (False, self.costs[ip], ip, port)
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+            self.assertEqual(search_best_tdx(), [])
+
+    @patch('hikyuu.data.common_pytdx.TdxHq_API')
+    @patch('hikyuu.data.common_pytdx.ping')
+    def test_ping_exception_is_isolated(self, mock_ping, mock_api):
+        """单个服务器抛异常时不应影响整体搜索 (旧的 executor.map(timeout=) 写法会让整个搜索抛 TimeoutError)"""
+        def ping_host(ip, port, multithread):
+            if ip.endswith('.2'):
+                raise TimeoutError('mock timeout')
+            return (True, self.costs[ip], ip, port)
+
+        mock_ping.side_effect = ping_host
+        api = MagicMock()
+        api.connect.return_value = True
+        api.get_security_bars.return_value = [{'close': 1.0}]
+        mock_api.return_value = api
+
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+            ret = search_best_tdx()
+        self.assertEqual(sorted(item[2] for item in ret), ['127.0.0.1', '127.0.0.3'])
+
+    @patch('hikyuu.data.common_pytdx.TdxHq_API')
+    @patch('hikyuu.data.common_pytdx.ping')
+    def test_fallback_to_pingable_hosts(self, mock_ping, mock_api):
+        """数据一致性校验全部失败 -> 退化为可ping通的服务器列表, 而非空列表"""
+        mock_ping.side_effect = lambda ip, port, multithread: (True, self.costs[ip], ip, port)
+        api = MagicMock()
+        api.connect.return_value = True
+        api.get_security_bars.return_value = []
+        mock_api.return_value = api
+
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+            ret = search_best_tdx()
+        self.assertEqual([item[2] for item in ret], ['127.0.0.2', '127.0.0.1', '127.0.0.3'])
+
+    @patch('hikyuu.data.common_pytdx.TdxHq_API')
+    @patch('hikyuu.data.common_pytdx.ping')
+    def test_majority_consistent_hosts_win(self, mock_ping, mock_api):
+        """数据一致的服务器集合数量最多者被返回 (原有行为不能被破坏)"""
+        mock_ping.side_effect = lambda ip, port, multithread: (True, self.costs[ip], ip, port)
+        # 校验按 pinged 顺序 (.2, .1, .3) 依次取数: 前两家一致, 第三家数据异常
+        closes = iter([1.0, 1.0, 2.0])
+        api = MagicMock()
+        api.connect.return_value = True
+        api.get_security_bars.side_effect = lambda *args: [{'close': next(closes)}]
+        mock_api.return_value = api
+
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+            ret = search_best_tdx()
+        self.assertEqual(sorted(item[2] for item in ret), ['127.0.0.1', '127.0.0.2'])
+
+
+    @patch('hikyuu.data.common_pytdx.TdxHq_API')
+    @patch('hikyuu.data.common_pytdx.ping')
+    def test_user_hosts_are_trusted(self, mock_ping, mock_api):
+        """~/.hikyuu/hosts.py 中自定义的服务器视为可信: 按配置顺序直接返回, 不做K线探测"""
+        user_hosts = [('主站A', '1.1.1.1', 7709), ('主站B', '2.2.2.2', 7727)]
+        with patch('hikyuu.data.common_pytdx._user_hosts', user_hosts):
+            ret = search_best_tdx()
+        self.assertEqual(ret, [(True, 0.0, '1.1.1.1', 7709), (True, 0.0, '2.2.2.2', 7727)])
+        mock_ping.assert_not_called()
+        mock_api.assert_not_called()
+
+    def test_to_host_tuple(self):
+        """(名称, ip, port) 与 (ip, port) 两种写法都支持"""
+        self.assertEqual(_to_host_tuple(('主站', '1.1.1.1', 7709)), ('1.1.1.1', 7709))
+        self.assertEqual(_to_host_tuple(('1.1.1.1', 7727)), ('1.1.1.1', 7727))
+
 
 if __name__ == '__main__':
     # 允许此文件作为独立的脚本直接运行, 方便单独调试

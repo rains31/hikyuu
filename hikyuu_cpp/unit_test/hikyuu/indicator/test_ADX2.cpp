@@ -6,9 +6,11 @@
  */
 
 #include "../test_config.h"
+#include <cmath>
 #include <fstream>
 #include <hikyuu/StockManager.h>
 #include <hikyuu/indicator/crt/ADX2.h>
+#include <hikyuu/indicator/crt/ADX.h>
 
 using namespace hku;
 

@@ -12,6 +12,7 @@
 #include <hikyuu/indicator/crt/FACTOR.h>
 #include <hikyuu/indicator/crt/MA.h>
 #include <hikyuu/indicator/crt/KDATA.h>
+#include <hikyuu/indicator/crt/SLICE.h>
 #include <hikyuu/factor/Factor.h>
 
 using namespace hku;

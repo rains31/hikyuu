@@ -7,11 +7,14 @@
 
 #include "../test_config.h"
 
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <hikyuu/StockManager.h>
 #include <hikyuu/plugin/extind.h>
 #include <hikyuu/indicator/crt/KDATA.h>
 #include <hikyuu/indicator/crt/PRICELIST.h>
+#include <hikyuu/indicator/crt/TS_RANK.h>
 #include <hikyuu/plugin/interface/plugins.h>
 #include <hikyuu/plugin/device.h>
 #include <hikyuu/indicator/imp/ITsRank.h>

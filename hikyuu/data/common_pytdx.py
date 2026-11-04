@@ -22,25 +22,39 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
+import sys
 import time
+import importlib
 from concurrent import futures
 from pytdx.hq import TdxHq_API
 from pytdx.config.hosts import hq_hosts
 
-try:
-    # Try to get the hosts configuration in the user directory
-    import os
-    import sys
-    import importlib
-    config_path = "{}/.hikyuu".format(os.path.expanduser('~'))
-    host_file = f"{config_path}/hosts.py"
-    if os.path.exists(host_file):
-        if config_path not in sys.path:
-            sys.path.append(config_path)
-        tmp = importlib.import_module(f'hosts')
-        hq_hosts = tmp.hq_hosts
-except:
-    pass
+
+def _to_host_tuple(host):
+    """将 (名称, ip, port) 或 (ip, port) 归一化为 (ip, port)"""
+    if len(host) >= 3:
+        return (host[1], host[2])
+    return (host[0], host[1])
+
+
+def _load_user_hosts():
+    """读取 ~/.hikyuu/hosts.py 中用户自定义的通达信行情服务器地址 (hq_hosts)"""
+    config_path = os.path.expanduser('~/.hikyuu')
+    if not os.path.exists(os.path.join(config_path, 'hosts.py')):
+        return None
+    if config_path not in sys.path:
+        sys.path.append(config_path)
+    try:
+        return importlib.import_module('hosts').hq_hosts
+    except Exception:
+        return None
+
+
+# 用户自定义地址为空时回落到 pytdx 内置地址列表
+_user_hosts = _load_user_hosts()
+if _user_hosts:
+    hq_hosts = _user_hosts
 
 
 def to_pytdx_market(market):
@@ -70,32 +84,51 @@ def ping(ip, port=7709, multithread=False, timeout=1):
 
 
 def search_best_tdx():
+    """搜索可用的通达信行情服务器，返回 (成功, 耗时, ip, port) 列表，按耗时排序
+
+    服务器地址来自 pytdx 内置的 hq_hosts，可用 ~/.hikyuu/hosts.py 中的同名列表覆盖；
+    用户自定义的地址视为可信，直接按配置顺序返回（不做K线探测，兼容只提供
+    股票列表/财务等元数据的服务器）。
+    """
     def ping2(host):
         return ping(host[0], host[1], host[2])
 
-    hosts = [(host[1], host[2], True) for host in hq_hosts]
+    if _user_hosts:
+        return [(True, 0.0) + _to_host_tuple(host) for host in _user_hosts]
+
+    hosts = [_to_host_tuple(host) + (True,) for host in hq_hosts]
+    pinged = []
     with futures.ThreadPoolExecutor() as executor:
-        res = executor.map(ping2, hosts, timeout=2)
-    x = [i for i in res if i[0] == True]
-    x.sort(key=lambda item: item[1])
+        # 不使用 executor.map(timeout=...)：整体的 map 超时会让整个搜索直接抛出 TimeoutError
+        tasks = [executor.submit(ping2, host) for host in hosts]
+        for task in futures.as_completed(tasks):
+            try:
+                res = task.result()
+            except Exception:
+                continue
+            if res[0]:
+                pinged.append(res)
+    pinged.sort(key=lambda item: item[1])
 
     # 校验 host 是否存在错误，取同样数据，相同结果最多的集合
     values = {}
-    for host in x:
+    for host in pinged:
         api = TdxHq_API(multithread=False)
         if api.connect(host[2], host[3]):
-            x = api.get_security_bars(9, 0, '159915', 0, 1)
-            if x and len(x) > 0:
-                if x[0]['close'] not in values:
-                    values[x[0]['close']] = [host]
+            bars = api.get_security_bars(9, 0, '159915', 0, 1)
+            if bars and len(bars) > 0:
+                if bars[0]['close'] not in values:
+                    values[bars[0]['close']] = [host]
                 else:
-                    values[x[0]['close']].append(host)
+                    values[bars[0]['close']].append(host)
             api.close()
     ret = []
     for _, host in values.items():
         if len(host) > len(ret):
             ret = host
-    return ret
+
+    # 数据一致性校验全部失败时，退化为可ping通的服务器，避免误判为无可用服务器
+    return ret if ret else pinged
 
 
 def pytdx_get_day_trans(api, pymarket, code, date):

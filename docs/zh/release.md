@@ -9,6 +9,8 @@
 * feat(part): 新增统一部件注册表体系，由 C++ 导出全部内置部件并支持 Python 端自定义部件：`PartRegistry` 集中注册全部内置工厂（204 个：138 指标 + 66 组件）并携带 `PartMeta` 元信息自省；配套的内置只读 `"core"` hub 从该注册表提供内置部件，`get_part("core.ind.ma", ...)` 直接从内存创建、不再访问数据库；可经 `register_python_part` 注册 Python 自定义部件；`PF_ModeA` / `PF_ModeB` / `PF_ModeC` 亦作为内置部件导出（`core.pf.modea` / `core.pf.modeb` / `core.pf.modec`）
 * feat(indicator): 新增 `TS_IC` 时序信息系数指标，在时间维度上于长度为 n 的滚动窗口内将因子序列与该标的自身的 ic_n 日收益序列做相关（默认 RankIC，收益由 K 线内部按 `ROCP(CLOSE, ic_n)` 计算，只需喂入因子）
 * feat(indicator): 新增 `np_apply` / `Indicator.apply`，将 numpy / pandas / ctypes 自定义函数包装为整段运行一次的指标节点，可像普通节点一样参与指标运算、信号生成与批量计算（支持 raw numba 模式，输入为单个或最多 6 个指标）
+* feat(data): `~/.hikyuu/hosts.py` 中自定义的通达信行情服务器地址视为可信地址，按配置顺序直接使用
+  （支持 `(名称, ip, port)` 与 `(ip, port)` 两种写法），不再做K线在线探测，兼容只提供股票列表/财务等元数据的服务器
 
 **⚡️ 优化改进**
 
@@ -17,6 +19,10 @@
 **🐞 缺陷修复**
 
 * fix(i18n): 修正 zh_CN draw 翻译中占位符格式不匹配，导致 matplot 绘制系统绩效失败
+* fix(gui): 导入线程搜索不到通达信行情服务器或未勾选任何导入项时，改为发出 FAILURE 结束消息并终止，
+  不再因访问 `self.hosts[0]` 抛出 `IndexError: list index out of range`（界面同时会提示配置 `~/.hikyuu/hosts.py`）
+* fix(data): `search_best_tdx` 不再因个别服务器超时而整体抛出 `TimeoutError`；数据一致性校验全部失败时退化为可连通的服务器列表
+* fix(build): macOS 下 `core.so` 与随包依赖库改用 `@rpath` 安装名，在任意工作目录下均可 `import hikyuu`
 
 ## 3.0.0 - 2026年10月28日
 
