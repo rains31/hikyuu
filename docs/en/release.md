@@ -7,9 +7,14 @@
 * feat(part): a new unified part registry, exporting all built-in parts from C++ and accepting Python-defined parts: `PartRegistry` registers every built-in factory (204 parts: 138 indicators + 66 components) with `PartMeta` introspection; the companion read-only built-in `"core"` hub serves the built-in parts from that registry, so `get_part("core.ind.ma", ...)` is created straight from memory without touching a database; a Python-defined part can be registered through `register_python_part`; `PF_ModeA` / `PF_ModeB` / `PF_ModeC` are exported as built-in parts too (`core.pf.modea` / `core.pf.modeb` / `core.pf.modec`)
 * feat(indicator): new `TS_IC` time-series information coefficient, correlating a factor series against its own security's `ic_n`-day return series over a rolling window of length `n` along the time axis (RankIC by default; the return is computed inside the K-line via `ROCP(CLOSE, ic_n)`, so only the factor needs to be fed in)
 * feat(indicator): new `np_apply` / `Indicator.apply`, wrapping a numpy / pandas / ctypes custom function as an indicator node that runs once over the whole series and takes part in indicator arithmetic, signal generation and batch calculation like any other node (a raw numba mode is supported; the input is a single indicator or up to 6 indicators)
-* feat(data): the TDX quote servers configured in `~/.hikyuu/hosts.py` are trusted as-is and used in the
-  configured order (both `(name, ip, port)` and `(ip, port)` forms are accepted), with no online K-line probe,
-  so servers that only serve the stock list / the financial data work too
+* feat(data): the TDX quote server addresses can be configured in three places, looked up at hikyuu startup
+  in this priority order: the `HKU_TDX_HOSTS` environment variable → `hosts.py` in the project root (see the
+  `hosts.py.example` template at the repository root) → `~/.hikyuu/hosts.py`; the configured addresses are
+  trusted as-is and used in the configured order (both `(name, ip, port)` and `(ip, port)` forms are accepted),
+  with no online K-line probe, so servers that only serve the stock list / the financial data work too
+* feat(docs): new `docs/tools/probe_tdx_hosts.py` quote-server probe tool, printing a `hq_hosts` block that can
+  be pasted straight into `hosts.py` (separating the servers that return K-line data from those that only
+  return the stock list)
 
 **⚡️ Improvements**
 
@@ -20,7 +25,7 @@
 * fix(i18n): correct a placeholder format mismatch in the zh_CN draw translation, which made the matplotlib system performance plot fail
 * fix(gui): when no TDX quote server is found or no import item is checked, the import thread now emits a
   FAILURE message and stops instead of raising `IndexError: list index out of range` on `self.hosts[0]`
-  (the GUI now also suggests configuring `~/.hikyuu/hosts.py`)
+  (the GUI now also suggests configuring the `hosts.py` quote server addresses)
 * fix(data): `search_best_tdx` no longer raises a global `TimeoutError` when a single server times out; when the
   data-consistency check finds no match, it falls back to the reachable servers instead of reporting none
 * fix(build): use `@rpath` install names for `core.so` and the bundled dependency libraries on macOS, so

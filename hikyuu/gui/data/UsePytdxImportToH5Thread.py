@@ -124,7 +124,8 @@ class UsePytdxImportToH5Thread(QThread):
         if not self.hosts:
             self.init_fail_msg = QCoreApplication.translate(
                 "ImportProgress",
-                '无法连接通达信行情服务器！请检查网络设置，或在 ~/.hikyuu/hosts.py 中配置可用的行情服务器地址')
+                '无法连接通达信行情服务器！请检查网络设置，并在项目根目录的 hosts.py（pip 安装为 '
+                '~/.hikyuu/hosts.py，也可通过环境变量 HKU_TDX_HOSTS 指定）中配置可用的行情服务器地址')
             self.logger.warn(self.init_fail_msg)
             self.send_message(['INFO', self.init_fail_msg])
             return False

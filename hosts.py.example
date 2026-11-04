@@ -1,0 +1,30 @@
+# -*- coding: utf-8 -*-
+"""
+通达信(pytdx)行情服务器配置模板
+
+复制本文件为 hosts.py 后按需修改，hikyuu 启动时按以下优先级自动加载（先匹配先生效）：
+
+    1. 环境变量 HKU_TDX_HOSTS 指定的文件
+    2. 项目根目录下的 hosts.py（本仓库场景，已被 .gitignore 忽略）
+    3. 用户目录下的 ~/.hikyuu/hosts.py（pip 安装场景）
+
+格式：hq_hosts = [(服务器名称, ip, port), ...]，也可简写为 (ip, port)。
+列表按优先级从前往后排序，第 1 个地址用于导入"股票代码表 / 指数名称 / 休假日历"。
+自定义地址视为可信地址，不再做在线探测，因此兼容只提供股票列表/财务等元数据的服务器。
+
+提示：pytdx 内置的 104 个地址大多已失效，可用下面的命令快速筛选本机可达的地址：
+
+    python -c "from concurrent.futures import ThreadPoolExecutor; \\
+    from pytdx.config.hosts import hq_hosts; from pytdx.hq import TdxHq_API; \\
+    f=lambda h:(h[1],h[2],TdxHq_API().connect(h[1],h[2],time_out=2) is not None); \\
+    [print(r) for r in ThreadPoolExecutor(32).map(f,hq_hosts) if r[2]]"
+
+部分服务器只返回股票列表、不返回K线；这类地址适合在线导入代码表，
+K线请在 GUI 中勾选"通达信本地数据"，从通达信客户端的 vipdoc 目录离线导入。
+"""
+
+hq_hosts = [
+    ("上海电信", "180.153.18.170", 7709),
+    ("杭州电信", "115.238.90.165", 7709),
+    ("西安联通", "117.34.114.13", 7709),
+]

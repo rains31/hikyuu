@@ -23,9 +23,8 @@
 # SOFTWARE.
 
 import os
-import sys
 import time
-import importlib
+import importlib.util
 from concurrent import futures
 from pytdx.hq import TdxHq_API
 from pytdx.config.hosts import hq_hosts
@@ -38,21 +37,39 @@ def _to_host_tuple(host):
     return (host[0], host[1])
 
 
-def _load_user_hosts():
-    """读取 ~/.hikyuu/hosts.py 中用户自定义的通达信行情服务器地址 (hq_hosts)"""
-    config_path = os.path.expanduser('~/.hikyuu')
-    if not os.path.exists(os.path.join(config_path, 'hosts.py')):
-        return None
-    if config_path not in sys.path:
-        sys.path.append(config_path)
+def _resolve_hosts_file():
+    """按优先级查找通达信行情服务器配置文件 (hosts.py)，未找到时返回 None
+
+    1. 环境变量 HKU_TDX_HOSTS 指定的文件；
+    2. 项目根目录下的 hosts.py（源码运行时为 hikyuu 包的上级目录，pip 安装时该路径通常不存在）；
+    3. 用户目录下的 ~/.hikyuu/hosts.py。
+    """
+    candidates = [os.environ.get('HKU_TDX_HOSTS')]
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(os.path.dirname(module_dir))
+    candidates.append(os.path.join(project_dir, 'hosts.py'))
+    candidates.append(os.path.expanduser('~/.hikyuu/hosts.py'))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def _load_hosts_file(path):
+    """从指定的 hosts.py 中读取 hq_hosts，读取失败时返回 None（不影响主流程）"""
     try:
-        return importlib.import_module('hosts').hq_hosts
+        spec = importlib.util.spec_from_file_location('hikyuu_tdx_hosts', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        hosts = getattr(module, 'hq_hosts', None)
+        return list(hosts) if hosts else None
     except Exception:
         return None
 
 
-# 用户自定义地址为空时回落到 pytdx 内置地址列表
-_user_hosts = _load_user_hosts()
+# 自定义地址为空时回落到 pytdx 内置的地址列表
+_hosts_file = _resolve_hosts_file()
+_user_hosts = _load_hosts_file(_hosts_file) if _hosts_file else None
 if _user_hosts:
     hq_hosts = _user_hosts
 

@@ -40,12 +40,18 @@ Configure the TDX quote servers
 Online import (the stock code table, indexes, the financial data, the K-line) requires a connection to
 a TDX quote server. Most of the server addresses bundled with pytdx are no longer alive. If the GUI
 reports "无法连接通达信行情服务器！请检查网络设置！" (cannot connect to the TDX quote server), configure
-your own addresses in ``~/.hikyuu/hosts.py`` (loaded automatically at hikyuu startup, no source change
-needed):
+your own addresses. hikyuu looks up the configuration file at startup in the following priority order
+(the first match wins), so no source change is needed:
+
+1. the file pointed to by the ``HKU_TDX_HOSTS`` environment variable;
+2. ``hosts.py`` in the project root — the recommended place for a source checkout of this repository:
+   copy the ``hosts.py.example`` template at the repository root to ``hosts.py`` and edit it (the file
+   is listed in ``.gitignore``, so it never gets committed);
+3. ``~/.hikyuu/hosts.py`` in the user directory — the recommended place for a pip installation.
 
 .. code-block:: python
 
-    # ~/.hikyuu/hosts.py
+    # hosts.py (the same format in all three locations)
     hq_hosts = [
         ("Shanghai Telecom", "180.153.18.170", 7709),
         ("Hangzhou Telecom", "115.238.90.165", 7709),
@@ -55,6 +61,13 @@ needed):
 The list is ordered by priority and the first entry is used to import the stock code table; the short
 ``(ip, port)`` form is also accepted. User-provided addresses are trusted as-is, i.e. no online probe
 is performed, so servers that only serve the stock list / the financial data also work.
+
+.. note::
+
+    From a source checkout, ``python docs/tools/probe_tdx_hosts.py`` probes the addresses bundled with
+    pytdx for the ones reachable from your machine and prints a paste-ready ``hq_hosts = [...]`` block;
+    append extra candidates as ``python docs/tools/probe_tdx_hosts.py 1.2.3.4:7709`` and add ``--bars``
+    to keep only the servers that return K-line data.
 
 .. note::
 

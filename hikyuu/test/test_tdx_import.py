@@ -41,7 +41,8 @@ if project_root not in sys.path:
 from hikyuu.gui.data.UseTdxImportToH5Thread import UseTdxImportToH5Thread
 from hikyuu.gui.data.ImportTdxToH5Task import ImportTdxToH5Task
 from hikyuu.gui.data.UsePytdxImportToH5Thread import UsePytdxImportToH5Thread
-from hikyuu.data.common_pytdx import search_best_tdx, _to_host_tuple
+from hikyuu.data.common_pytdx import search_best_tdx, _to_host_tuple, \
+    _resolve_hosts_file, _load_hosts_file
 
 # 引入 get_real_tdx_filepath, 用于支持使用真实的测试数据
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -436,7 +437,8 @@ class TestSearchBestTdx(unittest.TestCase):
     def test_all_ping_fail(self, mock_ping, mock_api):
         """所有服务器都ping不通 -> 返回空列表, 且不抛出异常"""
         mock_ping.side_effect = lambda ip, port, multithread: (False, self.costs[ip], ip, port)
-        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts), \
+                patch('hikyuu.data.common_pytdx._user_hosts', None):
             self.assertEqual(search_best_tdx(), [])
 
     @patch('hikyuu.data.common_pytdx.TdxHq_API')
@@ -454,7 +456,8 @@ class TestSearchBestTdx(unittest.TestCase):
         api.get_security_bars.return_value = [{'close': 1.0}]
         mock_api.return_value = api
 
-        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts), \
+                patch('hikyuu.data.common_pytdx._user_hosts', None):
             ret = search_best_tdx()
         self.assertEqual(sorted(item[2] for item in ret), ['127.0.0.1', '127.0.0.3'])
 
@@ -468,7 +471,8 @@ class TestSearchBestTdx(unittest.TestCase):
         api.get_security_bars.return_value = []
         mock_api.return_value = api
 
-        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts), \
+                patch('hikyuu.data.common_pytdx._user_hosts', None):
             ret = search_best_tdx()
         self.assertEqual([item[2] for item in ret], ['127.0.0.2', '127.0.0.1', '127.0.0.3'])
 
@@ -484,7 +488,8 @@ class TestSearchBestTdx(unittest.TestCase):
         api.get_security_bars.side_effect = lambda *args: [{'close': next(closes)}]
         mock_api.return_value = api
 
-        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts):
+        with patch('hikyuu.data.common_pytdx.hq_hosts', self.hosts), \
+                patch('hikyuu.data.common_pytdx._user_hosts', None):
             ret = search_best_tdx()
         self.assertEqual(sorted(item[2] for item in ret), ['127.0.0.1', '127.0.0.2'])
 
@@ -505,6 +510,111 @@ class TestSearchBestTdx(unittest.TestCase):
         self.assertEqual(_to_host_tuple(('主站', '1.1.1.1', 7709)), ('1.1.1.1', 7709))
         self.assertEqual(_to_host_tuple(('1.1.1.1', 7727)), ('1.1.1.1', 7727))
 
+
+
+class TestHostsConfig(unittest.TestCase):
+    """
+    针对 hosts.py 配置文件查找优先级与容错的测试。
+
+    行情服务器地址支持三处配置，按优先级（先匹配先生效）:
+    1. 环境变量 HKU_TDX_HOSTS 指定的文件
+    2. 项目根目录下的 hosts.py (源码运行场景)
+    3. 用户目录下的 ~/.hikyuu/hosts.py (pip 安装场景)
+    """
+
+    def setUp(self):
+        """为每个测试准备干净的临时目录, 并记录源码运行时对应的"项目根目录"路径。"""
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project_hosts = os.path.join(project_root, 'hosts.py')
+
+    def _resolve(self, env=None, env_exists=True, user_hosts=None, extra_exists=()):
+        """在受控环境下解析 hosts.py 路径
+
+        env: HKU_TDX_HOSTS 的值; env_exists: 该值指向的文件是否存在;
+        user_hosts: ~/.hikyuu/hosts.py 的路径 (None 表示该位置不存在);
+        extra_exists: 额外视为"存在"的文件路径集合。
+        """
+        exists = set(extra_exists)
+        if env and env_exists:
+            exists.add(env)
+        if user_hosts:
+            exists.add(user_hosts)
+
+        def fake_isfile(path):
+            return path in exists
+
+        with patch.dict(os.environ, {}, clear=True):
+            if env:
+                os.environ['HKU_TDX_HOSTS'] = env
+            with patch('hikyuu.data.common_pytdx.os.path.isfile', side_effect=fake_isfile), \
+                    patch('hikyuu.data.common_pytdx.os.path.expanduser', return_value=user_hosts or ''):
+                return _resolve_hosts_file()
+
+    def _write_hosts(self, content):
+        """在临时目录写入一个 hosts.py 并返回其路径"""
+        path = os.path.join(self.tmp.name, 'hosts.py')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return path
+
+    def test_env_var_has_top_priority(self):
+        """环境变量指定的地址文件优先级最高, 覆盖项目根目录与用户目录"""
+        env_file = self._write_hosts('hq_hosts = [("env", "9.9.9.9", 7709)]')
+        resolved = self._resolve(env=env_file, user_hosts='/tmp/not_exist_user/hosts.py',
+                                 extra_exists=[self.project_hosts])
+        self.assertEqual(resolved, env_file)
+
+    def test_project_root_beats_user_dir(self):
+        """源码运行时, 项目根目录的 hosts.py 优先于 ~/.hikyuu/hosts.py"""
+        resolved = self._resolve(user_hosts=os.path.join(self.tmp.name, 'user_hosts.py'),
+                                 extra_exists=[self.project_hosts])
+        self.assertEqual(resolved, self.project_hosts)
+
+    def test_user_dir_as_fallback(self):
+        """项目根目录没有 hosts.py 时, 回落到 ~/.hikyuu/hosts.py (pip 安装场景)"""
+        user_hosts = os.path.join(self.tmp.name, 'user_hosts.py')
+        resolved = self._resolve(user_hosts=user_hosts)
+        self.assertEqual(resolved, user_hosts)
+
+    def test_no_config_file(self):
+        """三处都没有配置文件时返回 None, 由调用方回落到 pytdx 内置地址"""
+        self.assertIsNone(self._resolve())
+
+    def test_env_var_pointing_to_missing_file_is_skipped(self):
+        """环境变量指向不存在的文件时继续向下查找; 空值环境变量直接跳过"""
+        user_hosts = os.path.join(self.tmp.name, 'user_hosts.py')
+        resolved = self._resolve(env='/tmp/definitely_not_exist/hosts.py', env_exists=False,
+                                 user_hosts=user_hosts)
+        self.assertEqual(resolved, user_hosts)
+        self.assertIsNone(self._resolve(env=''))
+
+    def test_load_hosts_file(self):
+        """读取 hq_hosts, 支持 (名称, ip, port) 与 (ip, port) 两种写法"""
+        path = self._write_hosts(
+            '# 注释\nhq_hosts = [("主站A", "1.1.1.1", 7709), ("2.2.2.2", 7727)]\n')
+        self.assertEqual(_load_hosts_file(path), [('主站A', '1.1.1.1', 7709), ('2.2.2.2', 7727)])
+
+    def test_load_hosts_file_tolerate_errors(self):
+        """配置文件语法错误 / 运行报错 / 文件不存在 / 缺少 hq_hosts / 空列表, 均返回 None 而不抛异常"""
+        broken = [
+            self._write_hosts('hq_hosts = [(:\n'),                                   # 语法错误
+            self._write_hosts('raise RuntimeError("boom")\n'),                      # 执行期异常
+            os.path.join(self.tmp.name, 'no_such_hosts.py'),                        # 文件不存在
+            self._write_hosts('some_other_name = [("a", "1.1.1.1", 7709)]\n'),      # 缺少 hq_hosts
+            self._write_hosts('hq_hosts = []\n'),                                   # 空列表
+        ]
+        for path in broken:
+            self.assertIsNone(_load_hosts_file(path), "读取异常的 hosts.py 应返回 None: %s" % path)
+
+    def test_user_hosts_replace_builtin_hosts(self):
+        """自定义地址非空时, 模块加载后 hq_hosts 即为自定义列表; 为空时保持 pytdx 内置列表"""
+        import hikyuu.data.common_pytdx as common_pytdx
+        from pytdx.config.hosts import hq_hosts as builtin_hosts
+        if common_pytdx._user_hosts:
+            self.assertEqual(common_pytdx.hq_hosts, common_pytdx._user_hosts)
+        else:
+            self.assertEqual(common_pytdx.hq_hosts, builtin_hosts)
 
 if __name__ == '__main__':
     # 允许此文件作为独立的脚本直接运行, 方便单独调试
